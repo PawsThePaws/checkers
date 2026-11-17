@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkers</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#1b1d23;color:#eee;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;padding:16px}
+h1{margin:8px 0 4px}
+#lobby,#game{width:100%;max-width:520px;text-align:center}
+.card{background:#262932;border-radius:14px;padding:20px;margin:12px 0}
+button{background:#e04848;color:#fff;border:0;border-radius:10px;padding:12px 18px;font-size:16px;cursor:pointer;margin:4px}
+button.alt{background:#3a3f4d}
+input{font-size:22px;letter-spacing:6px;text-transform:uppercase;text-align:center;width:150px;padding:10px;border-radius:10px;border:2px solid #3a3f4d;background:#1b1d23;color:#fff}
+#code{font-size:44px;letter-spacing:10px;font-weight:700;margin:8px 0;color:#ffd166}
+#status{font-size:18px;margin:10px 0;min-height:28px}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:100%;aspect-ratio:1;border:6px solid #5b3a1e;border-radius:6px;overflow:hidden}
+.sq{position:relative;display:flex;align-items:center;justify-content:center;background:#e8d3a8}
+.sq.d{background:#8b5a2b}
+.sq.hint::after{content:"";width:30%;height:30%;border-radius:50%;background:rgba(80,220,120,.8);position:absolute}
+.sq.sel{background:#b98a2f}
+.pc{width:80%;height:80%;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:clamp(14px,5vw,28px);color:#ffd166;box-shadow:0 3px 0 rgba(0,0,0,.45),inset 0 0 0 4px rgba(255,255,255,.18)}
+.pc.r{background:#d63b3b}
+.pc.b{background:#2b2b2b}
+.pc.can{outline:3px solid #5cf08a}
+.bar{display:flex;justify-content:space-between;font-size:15px;opacity:.9;margin:6px 2px}
+#chat{margin-top:12px;background:#262932;border-radius:12px;padding:10px;text-align:left}
+#msgs{height:110px;overflow-y:auto;font-size:15px;display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.m{max-width:85%;padding:5px 10px;border-radius:12px;word-wrap:break-word;overflow-wrap:anywhere}
+.m.me{align-self:flex-end;background:#e04848}
+.m.them{align-self:flex-start;background:#3a3f4d}
+.m.sys{align-self:center;background:none;font-size:12px;opacity:.6}
+#chatRow{display:flex;gap:6px}
+#chatIn{flex:1;min-width:0;font-size:16px;letter-spacing:0;text-transform:none;text-align:left;width:auto;padding:8px 10px}
+#chatRow button{margin:0;padding:8px 16px}
+.hide{display:none!important}
+.small{font-size:13px;opacity:.7}
+</style>
+</head>
+<body>
+<h1>♟ Checkers</h1>
+
+<div id="lobby">
+  <div class="card">
+    <button id="create">Create game</button>
+    <div id="hostBox" class="hide">
+      <div class="small">Tell your friend this code:</div>
+      <div id="code"></div>
+      <div class="small">Waiting for them to join…</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="small">Got a code?</div>
+    <input id="joinCode" maxlength="4" placeholder="ABCD"><br>
+    <button id="join" class="alt">Join game</button>
+  </div>
+  <div id="lobbyMsg" class="small"></div>
+</div>
+
+<div id="game" class="hide">
+  <div id="status"></div>
+  <div class="bar"><span id="oppInfo"></span><span id="meInfo"></span></div>
+  <div id="board"></div>
+  <button id="again" class="alt hide">Play again</button>
+  <div id="chat">
+    <div id="msgs"></div>
+    <div id="chatRow">
+      <input id="chatIn" maxlength="200" placeholder="Say something…" autocomplete="off">
+      <button id="chatSend">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- Game engine ----------
+const inB=(r,c)=>r>=0&&r<8&&c>=0&&c<8;
+const other=p=>p==='r'?'b':'r';
+function newGame(){
+  const b=Array.from({length:8},()=>Array(8).fill(0));
+  for(let r=0;r<8;r++)for(let c=0;c<8;c++)if((r+c)%2){if(r<3)b[r][c]='b';else if(r>4)b[r][c]='r';}
+  return{b,turn:'r',chain:null,winner:null};
+}
+function movesFor(b,r,c){
+  const p=b[r][c],o=p.toLowerCase(),k=p!==o;
+  const ds=k?[-1,1]:o==='r'?[-1]:[1];
+  const j=[],s=[];
+  for(const dr of ds)for(const dc of[-1,1]){
+    const nr=r+dr,nc=c+dc;if(!inB(nr,nc))continue;
+    const t=b[nr][nc];
+    if(!t)s.push({fr:r,fc:c,tr:nr,tc:nc});
+    else if(t.toLowerCase()!==o){
+      const lr=r+2*dr,lc=c+2*dc;
+      if(inB(lr,lc)&&!b[lr][lc])j.push({fr:r,fc:c,tr:lr,tc:lc,cr:nr,cc:nc});
+    }
+  }
+  return{j,s};
+}
+function legal(G){
+  if(G.winner)return[];
+  if(G.chain)return movesFor(G.b,...G.chain).j;
+  let J=[],S=[];
+  for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+    const p=G.b[r][c];
+    if(p&&p.toLowerCase()===G.turn){const m=movesFor(G.b,r,c);J.push(...m.j);S.push(...m.s);}
+  }
+  return J.length?J:S;
+}
+function apply(G,m){
+  const b=G.b,p=b[m.fr][m.fc],o=p.toLowerCase();
+  b[m.fr][m.fc]=0;
+  let np=p,crowned=false;
+  if(p===o&&((o==='r'&&m.tr===0)||(o==='b'&&m.tr===7))){np=p.toUpperCase();crowned=true;}
+  b[m.tr][m.tc]=np;
+  if(m.cr!==undefined){
+    b[m.cr][m.cc]=0;
+    if(!crowned&&movesFor(b,m.tr,m.tc).j.length){G.chain=[m.tr,m.tc];return;}
+  }
+  G.chain=null;G.turn=other(o);
+  if(!legal(G).length)G.winner=o;
+}
+
+// ---------- UI ----------
+const $=id=>document.getElementById(id);
+let G=newGame(),me='r',sel=null,conn=null,peer=null;
+const NAME={r:'Red',b:'Black'};
+
+function render(){
+  const L=legal(G),froms=new Set(L.map(m=>m.fr+','+m.fc));
+  const myTurn=G.turn===me&&!G.winner;
+  const hints=sel?L.filter(m=>m.fr===sel[0]&&m.fc===sel[1]):[];
+  const bd=$('board');bd.innerHTML='';
+  for(let vr=0;vr<8;vr++)for(let vc=0;vc<8;vc++){
+    const r=me==='r'?vr:7-vr,c=me==='r'?vc:7-vc;
+    const sq=document.createElement('div');
+    sq.className='sq'+((r+c)%2?' d':'');
+    if(sel&&sel[0]===r&&sel[1]===c)sq.classList.add('sel');
+    if(hints.some(m=>m.tr===r&&m.tc===c))sq.classList.add('hint');
+    const p=G.b[r][c];
+    if(p){
+      const o=p.toLowerCase(),d=document.createElement('div');
+      d.className='pc '+o+(myTurn&&o===me&&froms.has(r+','+c)?' can':'');
+      if(p!==o)d.textContent='♛';
+      sq.appendChild(d);
+    }
+    sq.onclick=()=>click(r,c);
+    bd.appendChild(sq);
+  }
+  let n={r:0,b:0};
+  G.b.flat().forEach(p=>{if(p)n[p.toLowerCase()]++});
+  $('meInfo').textContent=`You: ${NAME[me]} (${n[me]} left)`;
+  $('oppInfo').textContent=`Friend: ${NAME[other(me)]} (${n[other(me)]} left)`;
+  $('status').textContent=G.winner
+    ?(G.winner===me?'🎉 You win!':'You lost — good game!')
+    :myTurn?(G.chain?'Keep jumping!':'Your turn'):`Waiting for ${NAME[G.turn]}…`;
+  $('again').classList.toggle('hide',!G.winner);
+}
+
+function click(r,c){
+  if(G.turn!==me||G.winner)return;
+  const L=legal(G),p=G.b[r][c];
+  const m=sel&&L.find(m=>m.fr===sel[0]&&m.fc===sel[1]&&m.tr===r&&m.tc===c);
+  if(m){send({t:'move',m});apply(G,m);sel=G.chain&&G.turn===me?G.chain:null;render();return;}
+  if(p&&p.toLowerCase()===me&&L.some(m=>m.fr===r&&m.fc===c))sel=[r,c];else sel=null;
+  render();
+}
+
+// ---------- Networking (PeerJS, peer-to-peer) ----------
+const send=d=>{if(conn&&conn.open)conn.send(d)};
+function wire(c){
+  conn=c;
+  c.on('data',d=>{
+    if(d.t==='move'){
+      const m=legal(G).find(x=>x.fr===d.m.fr&&x.fc===d.m.fc&&x.tr===d.m.tr&&x.tc===d.m.tc);
+      if(m){apply(G,m);sel=null;render();}
+    }else if(d.t==='reset'){G=newGame();sel=null;render();addMsg('New game started','sys');}
+    else if(d.t==='chat'&&typeof d.text==='string')addMsg(d.text.slice(0,200),'them');
+  });
+  c.on('close',()=>{$('status').textContent='Your friend disconnected.';addMsg('Your friend disconnected','sys');});
+}
+function addMsg(text,who){
+  const d=document.createElement('div');
+  d.className='m '+who;d.textContent=text;
+  const box=$('msgs');box.appendChild(d);box.scrollTop=box.scrollHeight;
+}
+function sendChat(){
+  const i=$('chatIn'),t=i.value.trim();
+  if(!t||!conn||!conn.open)return;
+  send({t:'chat',text:t});addMsg(t,'me');i.value='';
+}
+$('chatSend').onclick=sendChat;
+$('chatIn').addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});
+function startGame(){
+  G=newGame();sel=null;
+  $('lobby').classList.add('hide');$('game').classList.remove('hide');
+  render();
+}
+const mkCode=()=>Array.from({length:4},()=>'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.random()*31|0]).join('');
+
+function host(){
+  const code=mkCode();
+  peer=new Peer('chkr-'+code);
+  peer.on('open',()=>{me='r';$('code').textContent=code;$('hostBox').classList.remove('hide');$('create').classList.add('hide');});
+  peer.on('error',e=>{
+    if(e.type==='unavailable-id'){peer.destroy();host();}
+    else $('lobbyMsg').textContent='Connection error: '+e.type;
+  });
+  peer.on('connection',c=>{
+    if(conn&&conn.open){c.close();return;}
+    c.on('open',()=>{wire(c);startGame();});
+  });
+}
+function join(){
+  const code=$('joinCode').value.trim().toUpperCase();
+  if(code.length!==4){$('lobbyMsg').textContent='Enter the 4-character code.';return;}
+  $('lobbyMsg').textContent='Connecting…';
+  peer=new Peer();
+  peer.on('open',()=>{
+    const c=peer.connect('chkr-'+code,{reliable:true});
+    const to=setTimeout(()=>{$('lobbyMsg').textContent="Couldn't find that game. Check the code.";},8000);
+    c.on('open',()=>{clearTimeout(to);me='b';wire(c);startGame();});
+  });
+  peer.on('error',e=>{$('lobbyMsg').textContent=e.type==='peer-unavailable'?"Couldn't find that game. Check the code.":'Connection error: '+e.type;});
+}
+$('create').onclick=host;
+$('join').onclick=join;
+$('again').onclick=()=>{send({t:'reset'});G=newGame();sel=null;render();};
+</script>
+</body>
+</html>
